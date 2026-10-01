@@ -11,8 +11,10 @@ sensor_links = ColorSensor(Port.B)
 sensor_rechts = ColorSensor(Port.D)
 
 SCHWARZ = 10
-GRENZE = 0.35
-TIEF = 0.2
+GRENZE = 0.25
+TIEF = 0.15
+WEISS_ABKLINGEN = 0.99995
+WEISS_MAX = 100
 MAX_SPEED = 800
 TURBO_SPEED = 1000
 ANLAUF = 0.6
@@ -23,7 +25,7 @@ KP_KURS = 5
 KURS_RICHTUNG = 1
 ENTPRELL = 6
 MITTEL = 3
-MIN_INNEN = 0.0
+MIN_INNEN = 0.15
 SCHLITZ_SPEED = 0.85
 
 for motor in (motor_links, motor_rechts):
@@ -67,6 +69,8 @@ class Seite:
         self.werte[self.index] = self.sensor.reflection()
         self.index = (self.index + 1) % MITTEL
         mittel = sum(self.werte) / MITTEL
+        self.weiss = max(mittel, self.weiss * WEISS_ABKLINGEN)
+        self.weiss = min(WEISS_MAX, self.weiss)
         hell = (mittel - SCHWARZ) / (self.weiss - SCHWARZ)
         hell = max(0, min(1, hell))
         self.hell = hell
@@ -122,7 +126,7 @@ while True:
 
         speed = MAX_SPEED * (1 - BREMSE * lenk)
         aussen = speed
-        innen = max(MIN_INNEN, speed * (1 - lenk))
+        innen = speed * max(MIN_INNEN, 1 - lenk)
 
         if richtung == 1:
             v_links, v_rechts = aussen, innen
