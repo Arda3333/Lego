@@ -10,21 +10,20 @@ motor_rechts = Motor(Port.E)
 sensor_links = ColorSensor(Port.B)
 sensor_rechts = ColorSensor(Port.D)
 
-# --- Einstellungen -------------------------------------------------------
-SCHWARZ = 10          # Reflexionswert auf tiefem Schwarz
-GRENZE = 0.6          # unter diesem Weiss-Anteil gilt "dunkel" (frueh lenken)
+SCHWARZ = 10
+GRENZE = 0.6
 MAX_SPEED = 800
 TURBO_SPEED = 1000
-ANLAUF = 0.6          # s bis Turbo nach Verlassen von Schwarz
-BREMSE = 0.4          # Tempoverlust beim Lenken
+ANLAUF = 0.6
+BREMSE = 0.4
 LENK_START = 0.7
-LENK_ZUWACHS = 3.0    # Lenkstaerke pro Sekunde, wenn Schwarz anhaelt
+LENK_ZUWACHS = 3.0
 KP_KURS = 5
 KURS_RICHTUNG = 1
-ENTPRELL = 15         # ms, die ein Sensor dunkel sein muss (Schlitze/Steinchen)
-MITTEL = 3            # Messwerte je Sensor, die gemittelt werden
-MIN_INNEN = 0.0       # Innenrad nie rueckwaerts
-SCHLITZ_SPEED = 0.85  # Tempofaktor waehrend ein kurzer Dunkelreiz noch unklar ist
+ENTPRELL = 15
+MITTEL = 3
+MIN_INNEN = 0.0
+SCHLITZ_SPEED = 0.85
 
 for motor in (motor_links, motor_rechts):
     try:
@@ -52,8 +51,6 @@ weiss_rechts = kalibrieren(sensor_rechts)
 
 
 class Seite:
-    """Ein Sensor: gemittelter Messwert + Entprellung."""
-
     def __init__(self, sensor, weiss):
         self.sensor = sensor
         self.weiss = weiss
@@ -61,8 +58,8 @@ class Seite:
         self.index = 0
         self.uhr = StopWatch()
         self.dunkel_aktiv = False
-        self.roh = 0     # Staerke ohne Entprellung
-        self.stark = 0   # Staerke nach Entprellung
+        self.roh = 0
+        self.stark = 0
 
     def messen(self):
         self.werte[self.index] = self.sensor.reflection()
@@ -134,8 +131,6 @@ while True:
         anteil = min(1, weiss_uhr.time() / 1000 / ANLAUF)
         speed = MAX_SPEED + (TURBO_SPEED - MAX_SPEED) * anteil
 
-        # Dunkelreiz laeuft noch, ist aber noch nicht lang genug (Schlitz?):
-        # Kurs halten und leicht langsamer, nicht lenken.
         if links.roh > 0 or rechts.roh > 0:
             speed *= SCHLITZ_SPEED
 
