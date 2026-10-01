@@ -11,7 +11,8 @@ sensor_links = ColorSensor(Port.B)
 sensor_rechts = ColorSensor(Port.D)
 
 SCHWARZ = 10
-GRENZE = 0.6
+GRENZE = 0.35
+TIEF = 0.2
 MAX_SPEED = 800
 TURBO_SPEED = 1000
 ANLAUF = 0.6
@@ -20,7 +21,7 @@ LENK_START = 0.7
 LENK_ZUWACHS = 3.0
 KP_KURS = 5
 KURS_RICHTUNG = 1
-ENTPRELL = 15
+ENTPRELL = 6
 MITTEL = 3
 MIN_INNEN = 0.0
 SCHLITZ_SPEED = 0.85
@@ -58,6 +59,7 @@ class Seite:
         self.index = 0
         self.uhr = StopWatch()
         self.dunkel_aktiv = False
+        self.hell = 1
         self.roh = 0
         self.stark = 0
 
@@ -67,6 +69,7 @@ class Seite:
         mittel = sum(self.werte) / MITTEL
         hell = (mittel - SCHWARZ) / (self.weiss - SCHWARZ)
         hell = max(0, min(1, hell))
+        self.hell = hell
         self.roh = 0 if hell >= GRENZE else (GRENZE - hell) / GRENZE
 
         if self.roh > 0:
@@ -93,6 +96,9 @@ while True:
     rechts.messen()
     dl = links.stark
     dr = rechts.stark
+    if dl > 0 and dr > 0 and links.hell > TIEF and rechts.hell > TIEF:
+        dl = 0
+        dr = 0
     kurs = KURS_RICHTUNG * hub.imu.heading()
 
     if dl > 0 and dr == 0:
