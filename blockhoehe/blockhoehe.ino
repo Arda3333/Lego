@@ -31,11 +31,12 @@ const uint16_t TIMING_MS     = 50;    // Messzeit pro Einzelmessung (mehr = gena
 const bool USE_NARROW_ROI    = true;  // engeres Blickfeld -> Klotz muss direkt unter dem Sensor stehen
 const uint16_t ROI_SIZE      = 4;     // 4..16 (SPADs pro Seite), 4 = engstes Blickfeld
 
-const int   SAMPLES          = 10;    // Einzelmessungen pro Anzeigewert (~0.5 s)
+const int   SAMPLES          = 30;    // Einzelmessungen pro Anzeigewert (~1.5 s)
 const int   CAL_SAMPLES      = 40;    // Einzelmessungen fuer den Nullpunkt
 const float MAX_DEV_CM       = 0.4;   // Abweichung vom Median, ab der ein Wert Ausreisser ist
 const float MIN_VALID_RATIO  = 0.7;   // Anteil gueltiger Einzelmessungen, sonst Messung verwerfen
-const float CLUSTER_MIN_RATIO = 0.3;  // so viele Messungen muessen den naechsten Wert (Klotz) bestaetigen
+const float CLUSTER_MIN_RATIO = 0.1;  // Anteil der Messungen, der den naechsten Wert (Klotz) bestaetigen muss
+const int   CLUSTER_MIN_COUNT = 4;    // mindestens so viele Messungen (gegen Einzelausreisser)
 const float ZERO_BAND_CM     = 0.2;   // darunter = "kein Klotz" -> 0.0
 const float STEP_CM          = 0.4;   // groessere Aenderung = Klotz aufgelegt/entfernt -> sofort uebernehmen
 const float SMOOTHING        = 0.5;   // Glaettung bei kleinen Aenderungen (0..1)
@@ -96,7 +97,7 @@ float measure(int n) {
   sortFloats(s, cnt);
 
   int need = (int)ceilf(cnt * CLUSTER_MIN_RATIO);
-  if (need < 3) need = 3;
+  if (need < CLUSTER_MIN_COUNT) need = CLUSTER_MIN_COUNT;
   for (int i = 0; i + need <= cnt; i++) {
     float sum = 0;
     int j = i;
@@ -201,7 +202,7 @@ void loop() {
   float d = measure(SAMPLES);
   if (d < 0) {
     // instabil (Klotz wird bewegt) oder Sensorfehler -> letzten Wert behalten
-    if (++failCount >= 20) { showText("ERR"); shownCm = -1.0; }
+    if (++failCount >= 10) { showText("ERR"); shownCm = -1.0; }
     return;
   }
   failCount = 0;
