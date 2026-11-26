@@ -128,36 +128,42 @@ void roiAnwenden() {
   sensor.stopRanging();
   sensor.VL53L1X_SetROI(roiGroesse, roiGroesse);
   sensor.VL53L1X_SetROICenter(spadNummer(roiCol, roiRow));
+  sensor.setTimingBudget(TIMING_BUDGET_MS);                       // normale (genaue) Messzeit
+  sensor.VL53L1X_SetInterMeasurementInMs(TIMING_BUDGET_MS + 5);
   sensor.startRanging();
   prefs.putInt("col", roiCol); prefs.putInt("row", roiRow); prefs.putInt("gr", roiGroesse);
   Serial.printf("Messfeld: Pixel %d,%d (SPAD %d), Groesse %d\n", roiCol, roiRow, spadNummer(roiCol, roiRow), roiGroesse);
   if (!nullpunktSetzen()) zeige("ERR");
 }
 
-// Misst den naechsten Abstand in einer Messfeld-Position (ROI 4x4). 9999 = nichts gueltig.
+// Misst den naechsten Abstand in einer Messfeld-Position (ROI 4x4), schnell (20 ms/Messung).
+// 9999 = nichts gueltig.
 float messeZone(int col, int row) {
   sensor.stopRanging();
   sensor.VL53L1X_SetROI(4, 4);
   sensor.VL53L1X_SetROICenter(spadNummer(col, row));
+  sensor.setTimingBudget(20);
+  sensor.VL53L1X_SetInterMeasurementInMs(25);
   sensor.startRanging();
-  float w[14];
+  float w[8];
   int ok = 0, verworfen = 0;
   unsigned long start = millis();
-  while (ok < 14 && millis() - start < 4000) {
+  while (ok < 8 && millis() - start < 1000) {
     float d;
-    if (leseAbstand(d)) { if (verworfen < 2) verworfen++; else w[ok++] = d; }
+    if (leseAbstand(d)) { if (verworfen < 1) verworfen++; else w[ok++] = d; }
     delay(1);
   }
   float e;
-  if (ok < 8 || !naechsteFlaeche(w, ok, 4, e)) return 9999;
+  if (ok < 5 || !naechsteFlaeche(w, ok, 2, e)) return 9999;
   return e;
 }
 
-// Scannt 25 Positionen und liefert die Abstaende in z[][] (9999 = ungueltig).
-const int SCAN_POS[5] = {3, 5, 8, 10, 12};
-void scanAlle(float z[5][5]) {
-  for (int r = 0; r < 5; r++) {
-    for (int c = 0; c < 5; c++) {
+// Scannt 4x4 = 16 Positionen (ca. 5 s) und liefert die Abstaende in z[][] (9999 = ungueltig).
+#define NPOS 4
+const int SCAN_POS[NPOS] = {3, 6, 9, 12};
+void scanAlle(float z[NPOS][NPOS]) {
+  for (int r = 0; r < NPOS; r++) {
+    for (int c = 0; c < NPOS; c++) {
       z[r][c] = messeZone(SCAN_POS[c], SCAN_POS[r]);
       Serial.printf("%7.1f ", z[r][c]);
     }
@@ -165,28 +171,28 @@ void scanAlle(float z[5][5]) {
   }
 }
 
-// Zwei Scans: erst mit LEEREM Tisch, dann mit Block auf der Ablagestelle.
+// Zwei kurze Scans: erst mit LEEREM Tisch, dann mit Block auf der Ablagestelle.
 // Der Block steht dort, wo der Abstand am staerksten KLEINER wurde (~37 mm).
 // So werden fest stehende Gegenstaende (Arm, Tischkante) ignoriert.
 void autoAusrichten() {
-  float leer[5][5], mit[5][5];
+  float leer[NPOS][NPOS], mit[NPOS][NPOS];
 
-  Serial.println("AUTO-AUSRICHTEN Schritt 1: Tisch LEER lassen (8 s)...");
+  Serial.println("AUTO-AUSRICHTEN Schritt 1: Tisch LEER lassen (5 s)...");
   zeige("LEER");
-  delay(8000);
+  delay(5000);
   zeige("SCAN");
   scanAlle(leer);
 
-  Serial.println("Schritt 2: Block jetzt auf die Ablagestelle legen (8 s)...");
+  Serial.println("Schritt 2: Block jetzt auf die Ablagestelle legen (5 s)...");
   zeige("BLOCK");
-  delay(8000);
+  delay(5000);
   zeige("SCAN");
   scanAlle(mit);
 
   float best = 0;
-  float diff[5][5];
-  for (int r = 0; r < 5; r++)
-    for (int c = 0; c < 5; c++) {
+  float diff[NPOS][NPOS];
+  for (int r = 0; r < NPOS; r++)
+    for (int c = 0; c < NPOS; c++) {
       diff[r][c] = (leer[r][c] < 9999 && mit[r][c] < 9999) ? leer[r][c] - mit[r][c] : 0;
       if (diff[r][c] > best) best = diff[r][c];
     }
@@ -200,8 +206,8 @@ void autoAusrichten() {
     return;
   }
   float sc = 0, sr = 0, sw = 0;
-  for (int r = 0; r < 5; r++)
-    for (int c = 0; c < 5; c++)
+  for (int r = 0; r < NPOS; r++)
+    for (int c = 0; c < NPOS; c++)
       if (diff[r][c] >= best - 8 && diff[r][c] >= 0.5f * blockMM) {
         sc += SCAN_POS[c] * diff[r][c]; sr += SCAN_POS[r] * diff[r][c]; sw += diff[r][c];
       }
@@ -209,9 +215,9 @@ void autoAusrichten() {
   roiRow = (int)lroundf(sr / sw);
   roiGroesse = 4;
   Serial.printf("Beste Position: Pixel %d,%d\n", roiCol, roiRow);
-  Serial.println("Block jetzt ENTFERNEN (8 s)...");
+  Serial.println("Block jetzt ENTFERNEN (5 s)...");
   zeige("WEG");
-  delay(8000);
+  delay(5000);
   roiAnwenden();   // speichert die Position und misst den Nullpunkt
 }
 
