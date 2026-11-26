@@ -52,20 +52,20 @@ void zeige(const char *text) {              // mittig (START, ERR, ...)
   display.print(text);
 }
 
-// Hoehe: linksbuendig, mit Leerzeichen davor = nach rechts geschoben.
-// 1 Leerzeichen = 3 LED-Spalten. Mehr/weniger verschieben: Zahl aendern (0 = ganz links).
-#define VERSCHIEBUNG_LEERZEICHEN 1
-void zeigeLinks(const char *text) {
-  display.setTextAlignment(PA_LEFT);
-  display.displayClear();
-  display.print(text);
-}
-
+// Hoehe: mittig zeichnen, dann um VERSCHIEBUNG_SPALTEN LED-Spalten schieben.
+//   positiv = nach rechts, negativ = nach links, 0 = mittig.
+//   Falls es in die falsche Richtung geht: Vorzeichen umdrehen (3 -> -3).
+#define VERSCHIEBUNG_SPALTEN 3
 void zeigeHoehe(float mm) {
   int zehntel = (int)lroundf(mm);          // mm = Zehntel cm
-  char text[16];
-  snprintf(text, sizeof(text), "%*s%d.%dcm", VERSCHIEBUNG_LEERZEICHEN, "", zehntel / 10, zehntel % 10);
-  zeigeLinks(text);
+  char text[12];
+  snprintf(text, sizeof(text), "%d.%dcm", zehntel / 10, zehntel % 10);
+  display.setTextAlignment(PA_CENTER);
+  display.displayClear();
+  display.print(text);
+  MD_MAX72XX *mx = display.getGraphicObject();
+  for (int i = 0; i < abs(VERSCHIEBUNG_SPALTEN); i++)
+    mx->transform(VERSCHIEBUNG_SPALTEN > 0 ? MD_MAX72XX::TSR : MD_MAX72XX::TSL);
 }
 
 void sortiere(float *w, int n) {
