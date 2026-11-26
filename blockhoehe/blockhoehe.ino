@@ -27,15 +27,15 @@ Adafruit_VL53L1X sensor;
 MD_Parola display(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 
 // ---------- Einstellungen ----------
-const float NOMINAL_HEIGHT   = 67.0;  // ungefaehre Sensorhoehe (nur Plausibilitaetscheck)
 const uint16_t TIMING_MS     = 50;    // Messzeit pro Einzelmessung (mehr = genauer)
 const bool USE_NARROW_ROI    = true;  // engeres Blickfeld -> Klotz muss direkt unter dem Sensor stehen
-const uint16_t ROI_SIZE      = 8;     // 4..16 (SPADs pro Seite)
+const uint16_t ROI_SIZE      = 4;     // 4..16 (SPADs pro Seite), 4 = engstes Blickfeld
 
 const int   SAMPLES          = 10;    // Einzelmessungen pro Anzeigewert (~0.5 s)
 const int   CAL_SAMPLES      = 40;    // Einzelmessungen fuer den Nullpunkt
 const float MAX_DEV_CM       = 0.4;   // Abweichung vom Median, ab der ein Wert Ausreisser ist
-const float MIN_VALID_RATIO  = 0.7;   // Anteil brauchbarer Werte, sonst Messung verwerfen
+const float MIN_VALID_RATIO  = 0.7;   // Anteil gueltiger Einzelmessungen, sonst Messung verwerfen
+const float CLUSTER_MIN_RATIO = 0.3;  // so viele Messungen muessen den naechsten Wert (Klotz) bestaetigen
 const float ZERO_BAND_CM     = 0.2;   // darunter = "kein Klotz" -> 0.0
 const float STEP_CM          = 0.4;   // groessere Aenderung = Klotz aufgelegt/entfernt -> sofort uebernehmen
 const float SMOOTHING        = 0.5;   // Glaettung bei kleinen Aenderungen (0..1)
@@ -86,25 +86,24 @@ int collect(float *out, int n) {
   return cnt;
 }
 
-// Robuster Abstand: Median -> Ausreisser raus -> Mittelwert.
-// Rueckgabe -1 = unbrauchbar (Sensorfehler oder instabil, z.B. Klotz wird gerade bewegt).
+// Robuster Abstand. Der Sensor sieht mit seinem Blickfeld oft Klotz UND Tisch zugleich.
+// Darum: sortieren und die NAECHSTE Gruppe (kleinster Abstand) nehmen, die von genug
+// Einzelmessungen bestaetigt wird. Rueckgabe -1 = unbrauchbar.
 float measure(int n) {
-  float v[CAL_SAMPLES > SAMPLES ? CAL_SAMPLES : SAMPLES];
-  int cnt = collect(v, n);
+  float s[CAL_SAMPLES > SAMPLES ? CAL_SAMPLES : SAMPLES];
+  int cnt = collect(s, n);
   if (cnt < (int)(n * MIN_VALID_RATIO)) return -1;
-
-  float s[sizeof(v) / sizeof(v[0])];
-  for (int i = 0; i < cnt; i++) s[i] = v[i];
   sortFloats(s, cnt);
-  float med = (cnt % 2) ? s[cnt / 2] : (s[cnt / 2 - 1] + s[cnt / 2]) / 2.0f;
 
-  float sum = 0;
-  int ok = 0;
-  for (int i = 0; i < cnt; i++) {
-    if (fabsf(v[i] - med) <= MAX_DEV_CM) { sum += v[i]; ok++; }
+  int need = (int)ceilf(cnt * CLUSTER_MIN_RATIO);
+  if (need < 3) need = 3;
+  for (int i = 0; i + need <= cnt; i++) {
+    float sum = 0;
+    int j = i;
+    while (j < cnt && s[j] - s[i] <= 2.0f * MAX_DEV_CM) { sum += s[j]; j++; }
+    if (j - i >= need) return sum / (j - i);
   }
-  if (ok < (int)(n * MIN_VALID_RATIO)) return -1;
-  return sum / ok;
+  return -1;
 }
 
 // Nullpunkt einmessen (Tisch muss leer sein)
@@ -120,8 +119,6 @@ void calibrate() {
       Serial.print("Nullpunkt: ");
       Serial.print(baselineCm, 2);
       Serial.println(" cm");
-      if (fabsf(baselineCm - NOMINAL_HEIGHT) > 15.0)
-        Serial.println("WARNUNG: Nullpunkt weicht stark von NOMINAL_HEIGHT ab - Tisch wirklich leer?");
       return;
     }
     Serial.println("Kalibrierung instabil, neuer Versuch...");
