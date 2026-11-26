@@ -3,7 +3,9 @@
 // Aus der gemessenen Hoehe werden die ganzen Bloecke bestimmt: jeder Block = +3.7cm
 // (0.0 / 3.7 / 7.4 / 11.1 / ...).
 //
-// Serial (115200): k = Nullpunkt neu (Tisch leer!) | b37 = Blockhoehe in mm | r6 = Messfeld 4..16 | d = Debug
+// Nullpunkt: Sensor haengt 67 cm ueber dem Tisch -> Hoehe = 670 mm - gemessener Abstand.
+// Serial (115200): s670 = Sensorhoehe in mm | k = Nullpunkt automatisch messen (Tisch leer!)
+//                  b37 = Blockhoehe in mm | r6 = Messfeld 4..16 | d = Debug
 
 #include <Wire.h>
 #include <SPI.h>
@@ -25,6 +27,7 @@
 #define TIMING_MS        100    // lange Messzeit = mehr Signal (auch blaue Bloecke)
 #define SIGNAL_SCHWELLE  300
 #define SIGMA_SCHWELLE   30
+#define SENSORHOEHE_MM   670.0f // Sensor haengt 67 cm ueber dem Tisch (0 cm = Tischflaeche)
 int roiGroesse = 6;             // 4 = engstes Messfeld ... 16 = breitestes (zur Laufzeit: r6)
 
 // ---------------- MESSUNG -------------------
@@ -42,6 +45,7 @@ MD_Parola display(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 
 float fenster[FENSTER];
 int   fN = 0, fIdx = 0;
+float SENSORHOEHE = SENSORHOEHE_MM;
 float baseMM = 0;               // Abstand Sensor -> leerer Tisch
 float blockMM = 37.0f;          // Hoehe eines Blocks in mm = 3,7 cm (zur Laufzeit: b37)
 int   bloecke = 0;              // aktuell angezeigte Blockanzahl
@@ -129,7 +133,16 @@ bool sensorStarten() {
   return false;
 }
 
-// Nullpunkt: Abstand zum LEEREN Tisch
+// Feste Nullhoehe: Tisch = 0 cm, Sensor 67 cm darueber
+void festeNull() {
+  baseMM = SENSORHOEHE;
+  fN = 0; fIdx = 0;
+  bloecke = 0; letzterKandidat = -1; stabil = 0;
+  zeigeHoehe(0);
+  Serial.printf("Sensorhoehe: %.0f mm (Tisch = 0 cm). Leerer Tisch sollte roh ~%.0f mm messen.\n", baseMM, baseMM);
+}
+
+// Nullpunkt automatisch: Abstand zum LEEREN Tisch messen
 bool kalibrieren() {
   zeige("0...");
   Serial.println("Nullpunkt: Tisch LEER lassen!");
@@ -156,7 +169,12 @@ bool kalibrieren() {
 void seriellBefehle() {
   while (Serial.available()) {
     char c = tolower(Serial.read());
-    if (c == 'k') { if (!kalibrieren()) zeige("ERR"); }
+    if (c == 's') {
+      int v = Serial.parseInt();
+      if (v >= 100 && v <= 1300) { SENSORHOEHE = v; festeNull(); }
+      else Serial.println("Ungueltig, z.B. s670 (100..1300 mm)");
+    }
+    else if (c == 'k') { if (!kalibrieren()) zeige("ERR"); }
     else if (c == 'b') {
       int v = Serial.parseInt();
       if (v >= 5 && v <= 200) { blockMM = v; zeigeHoehe(bloecke * blockMM); Serial.printf("Blockhoehe: %d mm\n", v); }
@@ -192,12 +210,8 @@ void setup() {
     zeige("ERROR");
     while (true) delay(1000);
   }
-  if (!kalibrieren()) {
-    Serial.println("Nullpunkt fehlgeschlagen - Sensor/Tisch pruefen.");
-    zeige("ERR");
-    while (true) delay(1000);
-  }
-  Serial.println("Bereit. k = Nullpunkt, r6 = Messfeld, d = Debug");
+  festeNull();     // 0 cm = Tisch, Sensor 67 cm darueber (kein Messen beim Start noetig)
+  Serial.println("Bereit. s670 = Sensorhoehe, k = Nullpunkt messen, b37 = Block, r6 = Messfeld, d = Debug");
 }
 
 void loop() {
