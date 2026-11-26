@@ -2,6 +2,9 @@
 // Sensor: VL53L1X von oben, Anzeige: 5x MAX7219 (FC16)
 //
 // Serial Monitor (115200): k = Nullpunkt neu | b37 = Blockhoehe in mm | d = Debug an/aus
+//   p8,7  = Messfeld auf Pixel (Spalte 0-15, Zeile 0-15) des Sensors richten (8,7 = Mitte)
+//   r4    = Groesse des Messfelds (4..16)
+// Danach wird der Nullpunkt automatisch neu gemessen (Tisch leer!).
 
 #include <Wire.h>
 #include <SPI.h>
@@ -40,6 +43,7 @@ float blockMM = 37.0;            // Hoehe eines Blocks in mm (zur Laufzeit: b37)
 Adafruit_VL53L1X sensor;
 MD_Parola display(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 
+int   roiCol = 8, roiRow = 7, roiGroesse = ROI_GROESSE;
 float baselineMM = 0;            // Abstand Sensor -> leerer Tisch
 float fenster[FENSTER];
 int   fN = 0, fIdx = 0;
@@ -77,6 +81,8 @@ void sortiere(float *w, int n) {
   }
 }
 
+bool nullpunktSetzen();
+
 bool leseAbstand(float &mm) {
   if (!sensor.dataReady()) return false;
   int16_t d = sensor.distance();
@@ -106,6 +112,21 @@ bool naechsteFlaeche(const float *werte, int n, int noetig, float &ergebnis) {
     if (j - i >= noetig) { ergebnis = summe / (j - i); return true; }
   }
   return false;
+}
+
+// Pixel (Spalte/Zeile 0..15) -> SPAD-Nummer des VL53L1X (Mitte = 199)
+uint8_t spadNummer(int col, int row) {
+  if (row < 8) return 128 + 8 * col + row;
+  return 127 - 8 * col - (row - 8);
+}
+
+void roiAnwenden() {
+  sensor.stopRanging();
+  sensor.VL53L1X_SetROI(roiGroesse, roiGroesse);
+  sensor.VL53L1X_SetROICenter(spadNummer(roiCol, roiRow));
+  sensor.startRanging();
+  Serial.printf("Messfeld: Pixel %d,%d (SPAD %d), Groesse %d\n", roiCol, roiRow, spadNummer(roiCol, roiRow), roiGroesse);
+  if (!nullpunktSetzen()) zeige("ERR");
 }
 
 bool sensorStarten() {
@@ -165,6 +186,17 @@ void seriellBefehle() {
         Serial.printf("Blockhoehe: %d mm\n", v);
         angezeigt = -1; stabil = 0; letzterKandidat = -1;
       } else Serial.println("Ungueltige Blockhoehe (5..200 mm), z.B. b37");
+    }
+    else if (c == 'p') {
+      int col = Serial.parseInt();
+      int row = Serial.parseInt();
+      if (col >= 0 && col <= 15 && row >= 0 && row <= 15) { roiCol = col; roiRow = row; roiAnwenden(); }
+      else Serial.println("Ungueltig, z.B. p8,7");
+    }
+    else if (c == 'r') {
+      int g = Serial.parseInt();
+      if (g >= 4 && g <= 16) { roiGroesse = g; roiAnwenden(); }
+      else Serial.println("Ungueltig, z.B. r4 (4..16)");
     }
     else if (c == 'd') {
       debug = !debug;
