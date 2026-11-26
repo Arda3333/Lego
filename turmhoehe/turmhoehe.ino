@@ -3,11 +3,13 @@
 //
 // Serial Monitor (115200): k = Nullpunkt neu | b37 = Blockhoehe in mm | d = Debug an/aus
 //   p8,7  = Messfeld auf Pixel (Spalte 0-15, Zeile 0-15) des Sensors richten (8,7 = Mitte)
+//   a     = AUTOMATISCH ausrichten: Block auf die Ablagestelle legen, Sensor sucht die Position selbst
 //   r4    = Groesse des Messfelds (4..16)
 // Danach wird der Nullpunkt automatisch neu gemessen (Tisch leer!).
 
 #include <Wire.h>
 #include <SPI.h>
+#include <Preferences.h>
 #include <Adafruit_VL53L1X.h>
 #include <MD_Parola.h>
 #include <MD_MAX72xx.h>
@@ -43,6 +45,7 @@ float blockMM = 37.0;            // Hoehe eines Blocks in mm (zur Laufzeit: b37)
 Adafruit_VL53L1X sensor;
 MD_Parola display(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 
+Preferences prefs;
 int   roiCol = 8, roiRow = 7, roiGroesse = ROI_GROESSE;
 float baselineMM = 0;            // Abstand Sensor -> leerer Tisch
 float fenster[FENSTER];
@@ -125,15 +128,78 @@ void roiAnwenden() {
   sensor.VL53L1X_SetROI(roiGroesse, roiGroesse);
   sensor.VL53L1X_SetROICenter(spadNummer(roiCol, roiRow));
   sensor.startRanging();
+  prefs.putInt("col", roiCol); prefs.putInt("row", roiRow); prefs.putInt("gr", roiGroesse);
   Serial.printf("Messfeld: Pixel %d,%d (SPAD %d), Groesse %d\n", roiCol, roiRow, spadNummer(roiCol, roiRow), roiGroesse);
   if (!nullpunktSetzen()) zeige("ERR");
+}
+
+// Misst den naechsten Abstand in einer Messfeld-Position (ROI 4x4). 9999 = nichts gueltig.
+float messeZone(int col, int row) {
+  sensor.stopRanging();
+  sensor.VL53L1X_SetROI(4, 4);
+  sensor.VL53L1X_SetROICenter(spadNummer(col, row));
+  sensor.startRanging();
+  float w[14];
+  int ok = 0, verworfen = 0;
+  unsigned long start = millis();
+  while (ok < 14 && millis() - start < 4000) {
+    float d;
+    if (leseAbstand(d)) { if (verworfen < 2) verworfen++; else w[ok++] = d; }
+    delay(1);
+  }
+  float e;
+  if (ok < 8 || !naechsteFlaeche(w, ok, 4, e)) return 9999;
+  return e;
+}
+
+// Block auf die Ablagestelle legen: der Sensor probiert 25 Positionen und
+// nimmt die, wo der Abstand am kleinsten ist (= Block-Oberseite).
+void autoAusrichten() {
+  Serial.println("AUTO-AUSRICHTEN: Block jetzt auf die Ablagestelle legen (8 s)...");
+  zeige("BLOCK");
+  delay(8000);
+  zeige("SCAN");
+  const int pos[5] = {2, 5, 8, 11, 14};
+  float z[5][5];
+  float best = 9999, worst = 0;
+  for (int r = 0; r < 5; r++) {
+    for (int c = 0; c < 5; c++) {
+      z[r][c] = messeZone(pos[c], pos[r]);
+      if (z[r][c] < 9999) {
+        if (z[r][c] < best) best = z[r][c];
+        if (z[r][c] > worst) worst = z[r][c];
+      }
+      Serial.printf("%7.1f ", z[r][c]);
+    }
+    Serial.println();
+  }
+  if (best >= 9999 || worst - best < 15) {
+    Serial.println("Kein Block erkannt (kein Abstandsunterschied). Messfeld bleibt unveraendert.");
+    zeige("NO");
+    delay(2000);
+    roiAnwenden();
+    return;
+  }
+  float sc = 0, sr = 0; int n = 0;
+  for (int r = 0; r < 5; r++)
+    for (int c = 0; c < 5; c++)
+      if (z[r][c] <= best + 6) { sc += pos[c]; sr += pos[r]; n++; }
+  roiCol = (int)lroundf(sc / n);
+  roiRow = (int)lroundf(sr / n);
+  roiGroesse = 4;
+  Serial.printf("Beste Position: Pixel %d,%d\n", roiCol, roiRow);
+  Serial.println("Block jetzt ENTFERNEN (8 s)...");
+  zeige("WEG");
+  delay(8000);
+  roiAnwenden();   // speichert die Position und misst den Nullpunkt
 }
 
 bool sensorStarten() {
   for (int versuch = 1; versuch <= 5; versuch++) {
     if (sensor.begin(0x29, &Wire)) {
       sensor.VL53L1X_SetDistanceMode(1);              // Short
-      sensor.VL53L1X_SetROI(ROI_GROESSE, ROI_GROESSE);
+      sensor.VL53L1X_SetROI(roiGroesse, roiGroesse);
+      sensor.VL53L1X_SetROICenter(spadNummer(roiCol, roiRow));
       sensor.setTimingBudget(TIMING_BUDGET_MS);
       sensor.VL53L1X_SetInterMeasurementInMs(TIMING_BUDGET_MS + 5);
       sensor.VL53L1X_SetSignalThreshold(SIGNAL_SCHWELLE);
@@ -187,6 +253,7 @@ void seriellBefehle() {
         angezeigt = -1; stabil = 0; letzterKandidat = -1;
       } else Serial.println("Ungueltige Blockhoehe (5..200 mm), z.B. b37");
     }
+    else if (c == 'a') autoAusrichten();
     else if (c == 'p') {
       int col = Serial.parseInt();
       int row = Serial.parseInt();
@@ -215,6 +282,11 @@ void setup() {
   display.setIntensity(HELLIGKEIT);
   display.setTextAlignment(PA_CENTER);
   zeige("START");
+
+  prefs.begin("turm", false);
+  roiCol = prefs.getInt("col", 8);
+  roiRow = prefs.getInt("row", 7);
+  roiGroesse = prefs.getInt("gr", ROI_GROESSE);
 
   if (!sensorStarten()) {
     Serial.println("Sensor nicht gefunden! Verkabelung pruefen.");
