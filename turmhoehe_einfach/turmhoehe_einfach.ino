@@ -46,16 +46,26 @@ bool  debug = true;
 uint8_t letzterStatus = 0;
 
 // ============================================================
-void zeige(const char *text) {
+void zeige(const char *text) {              // mittig (START, ERR, ...)
+  display.setTextAlignment(PA_CENTER);
+  display.displayClear();
+  display.print(text);
+}
+
+// Hoehe: linksbuendig, mit Leerzeichen davor = nach rechts geschoben.
+// 1 Leerzeichen = 3 LED-Spalten. Mehr/weniger verschieben: Zahl aendern (0 = ganz links).
+#define VERSCHIEBUNG_LEERZEICHEN 1
+void zeigeLinks(const char *text) {
+  display.setTextAlignment(PA_LEFT);
   display.displayClear();
   display.print(text);
 }
 
 void zeigeHoehe(float mm) {
   int zehntel = (int)lroundf(mm);          // mm = Zehntel cm
-  char text[12];
-  snprintf(text, sizeof(text), "%d.%dcm", zehntel / 10, zehntel % 10);
-  zeige(text);
+  char text[16];
+  snprintf(text, sizeof(text), "%*s%d.%dcm", VERSCHIEBUNG_LEERZEICHEN, "", zehntel / 10, zehntel % 10);
+  zeigeLinks(text);
 }
 
 void sortiere(float *w, int n) {
