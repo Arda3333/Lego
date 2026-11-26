@@ -4,6 +4,7 @@
 //   - Klotz/Turm  -> Anzeige = Hoehe in cm (Studs inklusive)
 // Nullpunkt wird beim Start (leerer Tisch!) automatisch eingemessen.
 // Neu nullen: BOOT-Taste (GPIO0) druecken oder 'z' im Serial Monitor senden.
+// Serial-Befehle: 'z' nullen | 'b3.7' Blockhoehe in cm setzen | 'm' Anzeige Hoehe <-> Blockanzahl
 
 #include <Wire.h>
 #include <Adafruit_VL53L1X.h>
@@ -39,8 +40,11 @@ const float ZERO_BAND_CM     = 0.2;   // darunter = "kein Klotz" -> 0.0
 const float STEP_CM          = 0.4;   // groessere Aenderung = Klotz aufgelegt/entfernt -> sofort uebernehmen
 const float SMOOTHING        = 0.5;   // Glaettung bei kleinen Aenderungen (0..1)
 const float DISPLAY_HYST_CM  = 0.15;  // Anzeige aendert sich erst ab dieser Differenz (kein Flackern)
+const float BLOCK_TOLERANCE  = 0.3;   // cm: so weit darf die Hoehe vom Vielfachen der Blockhoehe abweichen
 
 // ---------- Zustand ----------
+float blockCm    = 3.7;   // Hoehe eines Blocks (zur Laufzeit aenderbar: 'b3.5' im Serial Monitor)
+bool  showBlocks = false; // 'm' im Serial Monitor: Anzeige Hoehe (cm) <-> Anzahl Bloecke
 float baselineCm = 0.0;   // Abstand Sensor -> leerer Tisch
 float smoothCm   = 0.0;
 float shownCm    = -1.0;
@@ -130,7 +134,22 @@ void calibrate() {
 void handleInput() {
   bool zero = false;
   while (Serial.available()) {
-    if (Serial.read() == 'z') zero = true;
+    char c = Serial.read();
+    if (c == 'z') zero = true;
+    else if (c == 'm') {
+      showBlocks = !showBlocks;
+      shownCm = -1.0;                       // Anzeige neu zeichnen
+      Serial.println(showBlocks ? "Anzeige: Anzahl Bloecke" : "Anzeige: Hoehe in cm");
+    } else if (c == 'b') {
+      float b = Serial.parseFloat();        // z.B. b3.5
+      if (b >= 0.5 && b <= 30.0) {
+        blockCm = b;
+        shownCm = -1.0;
+        Serial.print("Blockhoehe: "); Serial.print(blockCm, 2); Serial.println(" cm");
+      } else {
+        Serial.println("Ungueltige Blockhoehe (0.5 .. 30 cm)");
+      }
+    }
   }
   if (digitalRead(ZERO_BUTTON) == LOW) {
     delay(30);
@@ -202,11 +221,23 @@ void loop() {
   bool toggledZero = (smoothCm == 0.0) != (shownCm == 0.0);
   if (shownCm < 0 || toggledZero || fabsf(smoothCm - shownCm) >= DISPLAY_HYST_CM) {
     shownCm = smoothCm;
-    showValue(shownCm);
+    if (showBlocks) {
+      char b[8];
+      snprintf(b, sizeof(b), "%d", (int)roundf(shownCm / blockCm));
+      showText(b);
+    } else {
+      showValue(shownCm);
+    }
   }
+
+  // Anzahl Bloecke und Plausibilitaet (Vielfaches der Blockhoehe?)
+  int   blocks = (int)roundf(smoothCm / blockCm);
+  float rest   = smoothCm - blocks * blockCm;
+  bool  fits   = fabsf(rest) <= BLOCK_TOLERANCE;
 
   Serial.print("Abstand: ");   Serial.print(d, 2);
   Serial.print(" cm | Hoehe: "); Serial.print(h, 2);
   Serial.print(" cm | Anzeige: "); Serial.print(shownCm, 1);
-  Serial.println(" cm");
+  Serial.print(" cm | Bloecke: "); Serial.print(blocks);
+  Serial.println(fits ? "" : " (Hoehe passt nicht zu ganzen Bloecken)");
 }
