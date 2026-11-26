@@ -32,6 +32,8 @@ int roiGroesse = 6;             // 4 = engstes Messfeld ... 16 = breitestes (zur
 #define CLUSTER_BREITE   10.0f  // mm: Werte innerhalb gelten als dieselbe Flaeche
 #define MIN_TREFFER      2      // so viele Messungen muessen die naechste Flaeche bestaetigen
 #define MAX_BLOECKE      17
+#define EIN_MM           10.0f  // ab dieser Hoehe gilt: mindestens 1 Block liegt (auch wenn der Sensor ihn nur teilweise sieht)
+#define AUS_MM           6.0f   // darunter wieder 0 (Hysterese)
 #define HYSTERESE        0.15f  // Reserve (in Bloecken) gegen Hin-und-Her-Springen
 #define STABIL_NOETIG    3      // gleiche Ergebnisse in Folge, bevor die Anzeige wechselt
 
@@ -217,10 +219,16 @@ void loop() {
 
   // Ganze Bloecke: jeder Block = blockMM (37 mm). Leer = 0.
   float nF = h / blockMM;
-  int kandidat = (int)lroundf(nF);
-  if (kandidat > MAX_BLOECKE) kandidat = MAX_BLOECKE;
-  // Hysterese: nur wechseln, wenn klar naeher an der neuen Stufe
-  if (kandidat != bloecke && fabsf(nF - bloecke) < 0.5f + HYSTERESE) kandidat = bloecke;
+  int kandidat;
+  if (h < (bloecke > 0 ? AUS_MM : EIN_MM)) {
+    kandidat = 0;                                     // leer
+  } else {
+    kandidat = (int)lroundf(nF);
+    if (kandidat < 1) kandidat = 1;                   // irgendwas liegt da -> mindestens 1 Block
+    if (kandidat > MAX_BLOECKE) kandidat = MAX_BLOECKE;
+    // Hysterese zwischen den Stufen
+    if (bloecke > 0 && kandidat != bloecke && fabsf(nF - bloecke) < 0.5f + HYSTERESE) kandidat = bloecke;
+  }
 
   if (kandidat == letzterKandidat) { if (stabil < 1000) stabil++; }
   else { letzterKandidat = kandidat; stabil = 1; }
