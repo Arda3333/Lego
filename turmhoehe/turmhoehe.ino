@@ -30,10 +30,11 @@
 float blockMM = 37.0;            // Hoehe eines Blocks in mm (zur Laufzeit: b37)
 
 // ---------------- MESSUNG -------------------
-#define FENSTER        20        // letzte Messwerte (~2 s)
+#define FENSTER        25        // letzte Messwerte (~2,5 s)
 #define CLUSTER_BREITE 10.0f     // mm: Werte innerhalb gelten als "dieselbe Flaeche"
-#define CLUSTER_MIN    3         // so viele Messungen muessen die naechste Flaeche bestaetigen
-#define STABIL_NOETIG  6         // gleiche Ergebnisse hintereinander, bevor die Anzeige wechselt
+#define CLUSTER_MIN    2         // so wenige Treffer reichen: ein Block fuellt nur einen kleinen Teil des Messflecks
+#define STABIL_AUF     4         // gleiche Ergebnisse hintereinander, bevor ein Block HINZUKOMMT (schnell)
+#define STABIL_AB      6         // ... bevor ein Block WEGFAELLT (traeger: ein Block geht nicht kurz verloren)
 #define HYSTERESE      0.15f     // Block-Anteil Reserve gegen Hin-und-Her-Springen
 
 Adafruit_VL53L1X sensor;
@@ -235,7 +236,8 @@ void loop() {
                   flaeche, h, nF, letzterStatus, stabil, kandidat);
   }
 
-  if (stabil >= STABIL_NOETIG && kandidat != angezeigt) {
+  int noetig = (kandidat > angezeigt) ? STABIL_AUF : STABIL_AB;
+  if (stabil >= noetig && kandidat != angezeigt) {
     angezeigt = kandidat;
     zeigeBloecke(angezeigt);
   }
