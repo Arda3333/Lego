@@ -4,6 +4,7 @@
 // Serial Monitor (115200): k = Nullpunkt neu | b37 = Blockhoehe in mm | d = Debug an/aus
 //   p8,7  = Messfeld auf Pixel (Spalte 0-15, Zeile 0-15) des Sensors richten (8,7 = Mitte)
 //   a     = AUTOMATISCH ausrichten: Block auf die Ablagestelle legen, Sensor sucht die Position selbst
+//   e     = Messfeld auf Standard (Mitte) zuruecksetzen
 //   r4    = Groesse des Messfelds (4..16)
 // Danach wird der Nullpunkt automatisch neu gemessen (Tisch leer!).
 
@@ -152,40 +153,60 @@ float messeZone(int col, int row) {
   return e;
 }
 
-// Block auf die Ablagestelle legen: der Sensor probiert 25 Positionen und
-// nimmt die, wo der Abstand am kleinsten ist (= Block-Oberseite).
-void autoAusrichten() {
-  Serial.println("AUTO-AUSRICHTEN: Block jetzt auf die Ablagestelle legen (8 s)...");
-  zeige("BLOCK");
-  delay(8000);
-  zeige("SCAN");
-  const int pos[5] = {2, 5, 8, 11, 14};
-  float z[5][5];
-  float best = 9999, worst = 0;
+// Scannt 25 Positionen und liefert die Abstaende in z[][] (9999 = ungueltig).
+const int SCAN_POS[5] = {3, 5, 8, 10, 12};
+void scanAlle(float z[5][5]) {
   for (int r = 0; r < 5; r++) {
     for (int c = 0; c < 5; c++) {
-      z[r][c] = messeZone(pos[c], pos[r]);
-      if (z[r][c] < 9999) {
-        if (z[r][c] < best) best = z[r][c];
-        if (z[r][c] > worst) worst = z[r][c];
-      }
+      z[r][c] = messeZone(SCAN_POS[c], SCAN_POS[r]);
       Serial.printf("%7.1f ", z[r][c]);
     }
     Serial.println();
   }
-  if (best >= 9999 || worst - best < 15) {
-    Serial.println("Kein Block erkannt (kein Abstandsunterschied). Messfeld bleibt unveraendert.");
+}
+
+// Zwei Scans: erst mit LEEREM Tisch, dann mit Block auf der Ablagestelle.
+// Der Block steht dort, wo der Abstand am staerksten KLEINER wurde (~37 mm).
+// So werden fest stehende Gegenstaende (Arm, Tischkante) ignoriert.
+void autoAusrichten() {
+  float leer[5][5], mit[5][5];
+
+  Serial.println("AUTO-AUSRICHTEN Schritt 1: Tisch LEER lassen (8 s)...");
+  zeige("LEER");
+  delay(8000);
+  zeige("SCAN");
+  scanAlle(leer);
+
+  Serial.println("Schritt 2: Block jetzt auf die Ablagestelle legen (8 s)...");
+  zeige("BLOCK");
+  delay(8000);
+  zeige("SCAN");
+  scanAlle(mit);
+
+  float best = 0;
+  float diff[5][5];
+  for (int r = 0; r < 5; r++)
+    for (int c = 0; c < 5; c++) {
+      diff[r][c] = (leer[r][c] < 9999 && mit[r][c] < 9999) ? leer[r][c] - mit[r][c] : 0;
+      if (diff[r][c] > best) best = diff[r][c];
+    }
+  Serial.printf("Groesste Abstandsaenderung: %.1f mm (Block ~%.0f mm)\n", best, blockMM);
+
+  if (best < 0.5f * blockMM) {
+    Serial.println("Block nicht erkannt (Aenderung zu klein). Messfeld bleibt unveraendert.");
     zeige("NO");
     delay(2000);
     roiAnwenden();
     return;
   }
-  float sc = 0, sr = 0; int n = 0;
+  float sc = 0, sr = 0, sw = 0;
   for (int r = 0; r < 5; r++)
     for (int c = 0; c < 5; c++)
-      if (z[r][c] <= best + 6) { sc += pos[c]; sr += pos[r]; n++; }
-  roiCol = (int)lroundf(sc / n);
-  roiRow = (int)lroundf(sr / n);
+      if (diff[r][c] >= best - 8 && diff[r][c] >= 0.5f * blockMM) {
+        sc += SCAN_POS[c] * diff[r][c]; sr += SCAN_POS[r] * diff[r][c]; sw += diff[r][c];
+      }
+  roiCol = (int)lroundf(sc / sw);
+  roiRow = (int)lroundf(sr / sw);
   roiGroesse = 4;
   Serial.printf("Beste Position: Pixel %d,%d\n", roiCol, roiRow);
   Serial.println("Block jetzt ENTFERNEN (8 s)...");
@@ -254,6 +275,10 @@ void seriellBefehle() {
       } else Serial.println("Ungueltige Blockhoehe (5..200 mm), z.B. b37");
     }
     else if (c == 'a') autoAusrichten();
+    else if (c == 'e') {   // Messfeld auf Standard zuruecksetzen
+      roiCol = 8; roiRow = 7; roiGroesse = ROI_GROESSE;
+      roiAnwenden();
+    }
     else if (c == 'p') {
       int col = Serial.parseInt();
       int row = Serial.parseInt();
