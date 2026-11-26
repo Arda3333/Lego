@@ -1,7 +1,7 @@
 // Turmhoehe EINFACH: ESP32 + VL53L1X (von oben) + 5x MAX7219 (FC16)
 // Misst dauernd den Abstand zum Tisch. Kein Block = 0.0cm.
-// Aus der gemessenen Hoehe werden die ganzen Bloecke bestimmt: jeder Block = +3.7cm
-// (0.0 / 3.7 / 7.4 / 11.1 / ...).
+// Jedes Mal, wenn ein neuer Block erkannt wird (Abstand wird kuerzer), zaehlt die Anzeige
+// um 3.7cm hoch: 0.0 -> 3.7 -> 7.4 -> 11.1 ... Wird ein Block weggenommen, zaehlt sie runter.
 //
 // Nullpunkt: Sensor haengt 67 cm ueber dem Tisch -> Hoehe = 670 mm - gemessener Abstand.
 // Serial (115200): s670 = Sensorhoehe in mm | k = Nullpunkt automatisch messen (Tisch leer!)
@@ -35,10 +35,9 @@ int roiGroesse = 6;             // 4 = engstes Messfeld ... 16 = breitestes (zur
 #define CLUSTER_BREITE   10.0f  // mm: Werte innerhalb gelten als dieselbe Flaeche
 #define MIN_TREFFER      2      // so viele Messungen muessen die naechste Flaeche bestaetigen
 #define MAX_BLOECKE      17
-#define EIN_MM           10.0f  // ab dieser Hoehe gilt: mindestens 1 Block liegt (auch wenn der Sensor ihn nur teilweise sieht)
-#define AUS_MM           6.0f   // darunter wieder 0 (Hysterese)
-#define HYSTERESE        0.15f  // Reserve (in Bloecken) gegen Hin-und-Her-Springen
-#define STABIL_NOETIG    3      // gleiche Ergebnisse in Folge, bevor die Anzeige wechselt
+#define STUFE_MIN_MM     8.0f   // so viel muss sich der Abstand aendern, damit ein Block dazukommt/wegfaellt
+#define STABIL_TOL_MM    4.0f   // Abstand gilt als ruhig, solange er sich nicht mehr als das aendert
+#define STABIL_NOETIG    8      // so viele ruhige Messungen in Folge (~0,8 s), bevor gezaehlt wird
 
 Adafruit_VL53L1X sensor;
 MD_Parola display(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
@@ -49,8 +48,9 @@ float SENSORHOEHE = SENSORHOEHE_MM;
 float baseMM = 0;               // Abstand Sensor -> leerer Tisch
 float blockMM = 37.0f;          // Hoehe eines Blocks in mm = 3,7 cm (zur Laufzeit: b37)
 int   bloecke = 0;              // aktuell angezeigte Blockanzahl
-int   letzterKandidat = -1;
-int   stabil = 0;
+float level = 0;                // Abstand (mm) beim aktuellen Stand der Blockanzahl
+float anker = 0;                // Abstand, auf dem der Sensor gerade ruhig steht
+int   stabil = 0;               // ruhige Messungen in Folge
 int   zaehler = 0;
 bool  debug = true;
 uint8_t letzterStatus = 0;
@@ -137,7 +137,7 @@ bool sensorStarten() {
 void festeNull() {
   baseMM = SENSORHOEHE;
   fN = 0; fIdx = 0;
-  bloecke = 0; letzterKandidat = -1; stabil = 0;
+  bloecke = 0; level = baseMM; anker = baseMM; stabil = 0;
   zeigeHoehe(0);
   Serial.printf("Sensorhoehe: %.0f mm (Tisch = 0 cm). Leerer Tisch sollte roh ~%.0f mm messen.\n", baseMM, baseMM);
 }
@@ -160,7 +160,7 @@ bool kalibrieren() {
   if (ok < 20 || !naechsteFlaeche(w, ok, (int)(ok * 0.4f), e)) return false;
   baseMM = e;
   fN = 0; fIdx = 0;
-  bloecke = 0; letzterKandidat = -1; stabil = 0;
+  bloecke = 0; level = baseMM; anker = baseMM; stabil = 0;
   zeigeHoehe(0);
   Serial.printf("Nullpunkt: %.1f mm  (Messfeld %d)\n", baseMM, roiGroesse);
   return true;
@@ -228,32 +228,42 @@ void loop() {
   float flaeche;
   if (!naechsteFlaeche(fenster, FENSTER, MIN_TREFFER, flaeche)) return;
 
-  float h = baseMM - flaeche;                         // gemessene Hoehe ueber dem Tisch (mm)
-  if (h < 0) h = 0;
-
-  // Ganze Bloecke: jeder Block = blockMM (37 mm). Leer = 0.
-  float nF = h / blockMM;
-  int kandidat;
-  if (h < (bloecke > 0 ? AUS_MM : EIN_MM)) {
-    kandidat = 0;                                     // leer
+  // Warten, bis der Abstand ruhig steht (Block liegt still, keine Hand im Weg)
+  if (fabsf(flaeche - anker) <= STABIL_TOL_MM) {
+    if (stabil < 1000) stabil++;
   } else {
-    kandidat = (int)lroundf(nF);
-    if (kandidat < 1) kandidat = 1;                   // irgendwas liegt da -> mindestens 1 Block
-    if (kandidat > MAX_BLOECKE) kandidat = MAX_BLOECKE;
-    // Hysterese zwischen den Stufen
-    if (bloecke > 0 && kandidat != bloecke && fabsf(nF - bloecke) < 0.5f + HYSTERESE) kandidat = bloecke;
+    anker = flaeche;
+    stabil = 1;
   }
 
-  if (kandidat == letzterKandidat) { if (stabil < 1000) stabil++; }
-  else { letzterKandidat = kandidat; stabil = 1; }
-
-  if (kandidat != bloecke && stabil >= STABIL_NOETIG) {
-    bloecke = kandidat;
-    zeigeHoehe(bloecke * blockMM);                    // z.B. 2 Bloecke -> 7.4cm
+  // Einmal pro ruhigem Zustand auswerten
+  if (stabil == STABIL_NOETIG) {
+    float diff = level - anker;                       // > 0: naeher am Sensor = Block dazu
+    int alt = bloecke;
+    if (fabsf(anker - baseMM) < STUFE_MIN_MM) {       // wieder auf Tischhoehe -> leer
+      bloecke = 0;
+      level = baseMM;
+    } else if (diff >= STUFE_MIN_MM) {                // Block(e) dazu: jeder erkannte Block = +1
+      int n = (int)lroundf(diff / blockMM);
+      if (n < 1) n = 1;
+      bloecke += n;
+      level = anker;
+    } else if (diff <= -STUFE_MIN_MM) {               // Block(e) weg
+      int n = (int)lroundf(-diff / blockMM);
+      if (n < 1) n = 1;
+      bloecke -= n;
+      level = anker;
+    }
+    if (bloecke < 0) bloecke = 0;
+    if (bloecke > MAX_BLOECKE) bloecke = MAX_BLOECKE;
+    if (bloecke != alt) {
+      zeigeHoehe(bloecke * blockMM);                  // z.B. 2 Bloecke -> 7.4cm
+      Serial.printf(">> %d Bloecke = %.1f cm\n", bloecke, bloecke * blockMM / 10.0f);
+    }
   }
 
   if (debug && (++zaehler % 5 == 0)) {
-    Serial.printf("roh: %6.1f | Flaeche: %6.1f | Hoehe: %5.1f mm = %.2f Bloecke | Anzeige: %d Bloecke = %.1f cm | Status: %d\n",
-                  d, flaeche, h, nF, bloecke, bloecke * blockMM / 10.0f, letzterStatus);
+    Serial.printf("roh: %6.1f | Flaeche: %6.1f | Stand: %6.1f | ruhig: %2d | Anzeige: %d Bloecke = %.1f cm | Status: %d\n",
+                  d, flaeche, level, stabil, bloecke, bloecke * blockMM / 10.0f, letzterStatus);
   }
 }
