@@ -1,8 +1,9 @@
 // Turmhoehe EINFACH: ESP32 + VL53L1X (von oben) + 5x MAX7219 (FC16)
-// Misst dauernd den Abstand. Kein Block = 0.0cm. Block drauf -> Abstand wird kuerzer
-// -> Hoehe = Nullpunkt - Abstand (in cm). Kein Zaehlen.
+// Misst dauernd den Abstand zum Tisch. Kein Block = 0.0cm.
+// Aus der gemessenen Hoehe werden die ganzen Bloecke bestimmt: jeder Block = +3.7cm
+// (0.0 / 3.7 / 7.4 / 11.1 / ...).
 //
-// Serial (115200): k = Nullpunkt neu (Tisch leer!) | r6 = Messfeld-Groesse 4..16 | d = Debug an/aus
+// Serial (115200): k = Nullpunkt neu (Tisch leer!) | b37 = Blockhoehe in mm | r6 = Messfeld 4..16 | d = Debug
 
 #include <Wire.h>
 #include <SPI.h>
@@ -30,8 +31,9 @@ int roiGroesse = 6;             // 4 = engstes Messfeld ... 16 = breitestes (zur
 #define FENSTER          16     // letzte Messwerte (~1,6 s)
 #define CLUSTER_BREITE   10.0f  // mm: Werte innerhalb gelten als dieselbe Flaeche
 #define MIN_TREFFER      2      // so viele Messungen muessen die naechste Flaeche bestaetigen
-#define ZERO_BAND_MM     4.0f   // darunter = kein Block -> 0.0
-#define ANZEIGE_HYST_MM  1.5f   // Anzeige aendert sich erst ab dieser Differenz
+#define MAX_BLOECKE      17
+#define HYSTERESE        0.15f  // Reserve (in Bloecken) gegen Hin-und-Her-Springen
+#define STABIL_NOETIG    3      // gleiche Ergebnisse in Folge, bevor die Anzeige wechselt
 
 Adafruit_VL53L1X sensor;
 MD_Parola display(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
@@ -39,8 +41,10 @@ MD_Parola display(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 float fenster[FENSTER];
 int   fN = 0, fIdx = 0;
 float baseMM = 0;               // Abstand Sensor -> leerer Tisch
-float angezeigtMM = 0;
-int   wechsel = 0;
+float blockMM = 37.0f;          // Hoehe eines Blocks in mm = 3,7 cm (zur Laufzeit: b37)
+int   bloecke = 0;              // aktuell angezeigte Blockanzahl
+int   letzterKandidat = -1;
+int   stabil = 0;
 int   zaehler = 0;
 bool  debug = true;
 uint8_t letzterStatus = 0;
@@ -141,7 +145,7 @@ bool kalibrieren() {
   if (ok < 20 || !naechsteFlaeche(w, ok, (int)(ok * 0.4f), e)) return false;
   baseMM = e;
   fN = 0; fIdx = 0;
-  angezeigtMM = 0; wechsel = 0;
+  bloecke = 0; letzterKandidat = -1; stabil = 0;
   zeigeHoehe(0);
   Serial.printf("Nullpunkt: %.1f mm  (Messfeld %d)\n", baseMM, roiGroesse);
   return true;
@@ -151,6 +155,11 @@ void seriellBefehle() {
   while (Serial.available()) {
     char c = tolower(Serial.read());
     if (c == 'k') { if (!kalibrieren()) zeige("ERR"); }
+    else if (c == 'b') {
+      int v = Serial.parseInt();
+      if (v >= 5 && v <= 200) { blockMM = v; zeigeHoehe(bloecke * blockMM); Serial.printf("Blockhoehe: %d mm\n", v); }
+      else Serial.println("Ungueltig, z.B. b37 (5..200 mm)");
+    }
     else if (c == 'd') { debug = !debug; Serial.printf("Debug %s\n", debug ? "AN" : "AUS"); }
     else if (c == 'r') {
       int g = Serial.parseInt();
@@ -203,20 +212,26 @@ void loop() {
   float flaeche;
   if (!naechsteFlaeche(fenster, FENSTER, MIN_TREFFER, flaeche)) return;
 
-  float h = baseMM - flaeche;                         // Hoehe ueber dem Tisch (mm)
-  float kandidat = (h > ZERO_BAND_MM) ? h : 0;
+  float h = baseMM - flaeche;                         // gemessene Hoehe ueber dem Tisch (mm)
+  if (h < 0) h = 0;
 
-  // 0 <-> Block erst nach 3 gleichen Ergebnissen in Folge, sonst mit Hysterese
-  bool nullWechsel = (kandidat == 0) != (angezeigtMM == 0);
-  if (nullWechsel) {
-    if (++wechsel >= 3) { angezeigtMM = kandidat; zeigeHoehe(angezeigtMM); wechsel = 0; }
-  } else {
-    wechsel = 0;
-    if (fabsf(kandidat - angezeigtMM) >= ANZEIGE_HYST_MM) { angezeigtMM = kandidat; zeigeHoehe(angezeigtMM); }
+  // Ganze Bloecke: jeder Block = blockMM (37 mm). Leer = 0.
+  float nF = h / blockMM;
+  int kandidat = (int)lroundf(nF);
+  if (kandidat > MAX_BLOECKE) kandidat = MAX_BLOECKE;
+  // Hysterese: nur wechseln, wenn klar naeher an der neuen Stufe
+  if (kandidat != bloecke && fabsf(nF - bloecke) < 0.5f + HYSTERESE) kandidat = bloecke;
+
+  if (kandidat == letzterKandidat) { if (stabil < 1000) stabil++; }
+  else { letzterKandidat = kandidat; stabil = 1; }
+
+  if (kandidat != bloecke && stabil >= STABIL_NOETIG) {
+    bloecke = kandidat;
+    zeigeHoehe(bloecke * blockMM);                    // z.B. 2 Bloecke -> 7.4cm
   }
 
   if (debug && (++zaehler % 5 == 0)) {
-    Serial.printf("roh: %6.1f | Flaeche: %6.1f | Hoehe: %5.1f mm | Anzeige: %5.1f mm | Status: %d\n",
-                  d, flaeche, h, angezeigtMM, letzterStatus);
+    Serial.printf("roh: %6.1f | Flaeche: %6.1f | Hoehe: %5.1f mm = %.2f Bloecke | Anzeige: %d Bloecke = %.1f cm | Status: %d\n",
+                  d, flaeche, h, nF, bloecke, bloecke * blockMM / 10.0f, letzterStatus);
   }
 }
