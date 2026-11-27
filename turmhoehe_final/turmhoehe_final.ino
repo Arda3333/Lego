@@ -10,6 +10,7 @@
 #define CS_PIN        5
 #define CLK_PIN       18
 #define HELLIGKEIT    4
+#define TASTE_PIN     0
 
 #define SDA_PIN          21
 #define SCL_PIN          22
@@ -78,6 +79,9 @@ int   stabil = 0;
 uint8_t letzterStatus = 0;
 int   zaehler = 0;
 bool  debug = true;
+bool  rohModus = false;
+bool  tasteAlt = HIGH;
+int   rohZaehler = 0;
 
 struct Auswertung {
   bool  hatFlaeche;
@@ -92,14 +96,18 @@ void zeige(const char *text) {
   display.print(text);
 }
 
-void zeigeBloecke(int b) {
-  int mm = b * BLOCK_MM;
-  char text[12];
-  snprintf(text, sizeof(text), "%d.%dcm", mm / 10, mm % 10);
+void zeigeText(const char *text) {
   display.setFont(zahlenFont);
   display.setCharSpacing(1);
   display.displayClear();
   display.print(text);
+}
+
+void zeigeBloecke(int b) {
+  int mm = b * BLOCK_MM;
+  char text[12];
+  snprintf(text, sizeof(text), "%d.%dcm", mm / 10, mm % 10);
+  if (!rohModus) zeigeText(text);
   Serial.printf(">> %d Bloecke = %s\n", b, text);
 }
 
@@ -194,6 +202,19 @@ bool nullpunktSetzen() {
   return true;
 }
 
+void tasteAbfragen() {
+  bool t = digitalRead(TASTE_PIN);
+  if (tasteAlt == HIGH && t == LOW) {
+    delay(30);
+    if (digitalRead(TASTE_PIN) == LOW) {
+      rohModus = !rohModus;
+      if (rohModus) zeigeText("000c00");
+      else zeigeBloecke(bloecke);
+    }
+  }
+  tasteAlt = t;
+}
+
 void seriellBefehle() {
   while (Serial.available()) {
     char c = tolower(Serial.read());
@@ -204,6 +225,7 @@ void seriellBefehle() {
 
 void setup() {
   Serial.begin(115200);
+  pinMode(TASTE_PIN, INPUT_PULLUP);
   Wire.begin(SDA_PIN, SCL_PIN);
   Wire.setClock(400000);
 
@@ -227,10 +249,21 @@ void setup() {
 
 void loop() {
   seriellBefehle();
+  tasteAbfragen();
   if (!leseSample()) return;
   if (fN < N_FENSTER) return;
 
   Auswertung a = auswerten();
+
+  if (rohModus && (++rohZaehler % 3 == 0)) {
+    int dm = a.hatFlaeche ? (int)lroundf(a.flaeche) : 0;
+    int sp = baseSig > 0 ? (int)lroundf(100.0f * a.sig / baseSig) : 0;
+    if (dm > 999) dm = 999;
+    if (sp > 99) sp = 99;
+    char t[12];
+    snprintf(t, sizeof(t), "%03dc%02d", dm, sp);
+    zeigeText(t);
+  }
 
   bool blockAbstand = a.hatFlaeche && (baseDist - a.flaeche >= STUFE_MIN_MM);
   bool dunkel = (baseSig > 20 && a.sig < DUNKEL_SIGNAL * baseSig) ||
