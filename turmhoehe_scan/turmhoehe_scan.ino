@@ -13,7 +13,7 @@
 
 // ---------------- LED MATRIX ----------------
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW
-#define MAX_DEVICES   5
+#define MAX_DEVICES   4
 #define DATA_PIN      23
 #define CS_PIN        5
 #define CLK_PIN       18
