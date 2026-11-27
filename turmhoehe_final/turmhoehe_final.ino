@@ -14,22 +14,23 @@
 
 #define SDA_PIN          21
 #define SCL_PIN          22
-#define TIMING_MS        100
-#define ROI_GROESSE      6
+#define TIMING_MS        50
+#define ROI_GROESSE      4
 #define SIGNAL_SCHWELLE  300
 #define SIGMA_SCHWELLE   30
 
 #define BLOCK_MM         37
 #define MAX_BLOECKE      17
 
-#define N_FENSTER        24
+#define N_FENSTER        12
 #define CLUSTER_BREITE   10
 #define MIN_TREFFER      2
 #define STUFE_MIN_MM     8.0f
-#define DUNKEL_SIGNAL    0.6f
-#define DUNKEL_GUELTIG   0.35f
+#define DUNKEL_SIGNAL    0.85f
+#define DUNKEL_FREI      0.93f
+#define DUNKEL_GUELTIG   0.25f
 #define STABIL_TOL_MM    5.0f
-#define STABIL_NOETIG    8
+#define STABIL_NOETIG    3
 
 #define LEER 0,
 MD_MAX72XX::fontType_t zahlenFont[] PROGMEM = {
@@ -78,7 +79,8 @@ float anker = 0;
 int   stabil = 0;
 uint8_t letzterStatus = 0;
 int   zaehler = 0;
-bool  debug = true;
+bool  debug = false;
+bool  dunkelAktiv = false;
 bool  rohModus = false;
 bool  tasteAlt = HIGH;
 int   rohZaehler = 0;
@@ -196,7 +198,7 @@ bool nullpunktSetzen() {
   baseGut = a.gutAnteil;
   baseSig = a.sig;
   fN = 0; fIdx = 0;
-  bloecke = 0; level = baseDist; anker = baseDist; stabil = 0;
+  bloecke = 0; level = baseDist; anker = baseDist; stabil = 0; dunkelAktiv = false;
   Serial.printf("Leer: Abstand %.1f mm | gueltig %.0f %% | Signal %.0f\n", baseDist, baseGut * 100, baseSig);
   zeigeBloecke(0);
   return true;
@@ -266,19 +268,19 @@ void loop() {
   }
 
   bool blockAbstand = a.hatFlaeche && (baseDist - a.flaeche >= STUFE_MIN_MM);
-  bool dunkel = (baseSig > 20 && a.sig < DUNKEL_SIGNAL * baseSig) ||
-                (a.gutAnteil < baseGut - DUNKEL_GUELTIG);
+  float sigRatio = baseSig > 20 ? a.sig / baseSig : 1.0f;
+  if (!dunkelAktiv && (sigRatio < DUNKEL_SIGNAL || a.gutAnteil < baseGut - DUNKEL_GUELTIG)) dunkelAktiv = true;
+  else if (dunkelAktiv && sigRatio > DUNKEL_FREI && a.gutAnteil >= baseGut - DUNKEL_GUELTIG) dunkelAktiv = false;
+  bool dunkel = dunkelAktiv;
   float eff = baseDist;
   if (blockAbstand)      eff = a.flaeche;
   else if (dunkel)       eff = baseDist - BLOCK_MM;
 
   if (fabsf(eff - anker) <= STABIL_TOL_MM) {
     if (stabil < 1000) stabil++;
-  } else if (stabil > 2) {
-    stabil -= 2;
   } else {
     anker = eff;
-    stabil = 0;
+    stabil = 1;
   }
 
   if (stabil == STABIL_NOETIG) {
@@ -303,7 +305,7 @@ void loop() {
     if (bloecke != alt) zeigeBloecke(bloecke);
   }
 
-  if (debug && (++zaehler % 5 == 0)) {
+  if (debug && (++zaehler % 10 == 0)) {
     Serial.printf("Flaeche: %6.1f | gueltig: %3.0f%% | Signal: %5.0f (leer %5.0f) | %s | ruhig: %2d | Status: %d | -> %d Bloecke\n",
                   a.hatFlaeche ? a.flaeche : 0.0f, a.gutAnteil * 100, a.sig, baseSig,
                   blockAbstand ? "ABSTAND" : (dunkel ? "DUNKEL " : "leer   "),
